@@ -21,6 +21,11 @@ class mpi_backend {
                 const buffer_pool& pool);
     std::vector<timing_result> get_timings() const;
 
+    int64_t get_total_time() const;
+    int64_t get_warmup_time() const;
+
   private:
     std::vector<timing_result> timings_;
+    int64_t total_time_ns_ = 0;
+    int64_t warmup_time_ns_ = 0;
 };

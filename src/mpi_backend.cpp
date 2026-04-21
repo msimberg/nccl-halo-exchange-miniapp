@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+
 mpi_backend::mpi_backend() {}
 
 mpi_backend::~mpi_backend() {}
@@ -52,16 +53,25 @@ void mpi_backend::replay(const log_data& log, int iterations, int warmup, bool v
         }
     };
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    auto warmup_start = std::chrono::high_resolution_clock::now();
     for (int w = 0; w < warmup; ++w) {
         run_iteration();
     }
+    MPI_Barrier(MPI_COMM_WORLD);
+    auto warmup_end = std::chrono::high_resolution_clock::now();
+    warmup_time_ns_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(warmup_end - warmup_start).count();
 
+    auto iter_start = warmup_end;
     for (int iter = 0; iter < iterations; ++iter) {
         for (const auto& entries : by_group) {
             if (entries.empty()) continue;
 
             const int gid = entries.front()->group_id;
             int req_count = 0;
+
+            auto start = std::chrono::high_resolution_clock::now();
 
             for (const auto* entry : entries) {
                 if (entry->dir == direction::recv) {
@@ -79,8 +89,6 @@ void mpi_backend::replay(const log_data& log, int iterations, int warmup, bool v
                 }
             }
 
-            auto start = std::chrono::high_resolution_clock::now();
-
             MPI_Waitall(req_count, requests.data(), MPI_STATUSES_IGNORE);
 
             auto end = std::chrono::high_resolution_clock::now();
@@ -90,6 +98,14 @@ void mpi_backend::replay(const log_data& log, int iterations, int warmup, bool v
             timings_.push_back({my_rank, gid, iter, duration_ns});
         }
     }
+    MPI_Barrier(MPI_COMM_WORLD);
+    auto iter_end = std::chrono::high_resolution_clock::now();
+    total_time_ns_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(iter_end - iter_start).count();
 }
 
 std::vector<timing_result> mpi_backend::get_timings() const { return timings_; }
+
+int64_t mpi_backend::get_total_time() const { return total_time_ns_; }
+
+int64_t mpi_backend::get_warmup_time() const { return warmup_time_ns_; }

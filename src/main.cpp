@@ -7,7 +7,6 @@
 #include <mpi.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -207,19 +206,22 @@ int main(int argc, char** argv) {
                   << "Buffers: " << max_ops << " x " << max_size << " bytes\n";
     }
 
-    MPI_Barrier(MPI_COMM_WORLD);
-    auto total_start = std::chrono::high_resolution_clock::now();
-
     std::vector<timing_result> local_timings;
+    int64_t total_time_ns = 0;
+    int64_t warmup_time_ns = 0;
 
     if (cfg.backend == "mpi") {
         mpi_backend backend;
         backend.replay(log, cfg.iterations, cfg.warmup, cfg.verbose, *pool);
         local_timings = backend.get_timings();
+        total_time_ns = backend.get_total_time();
+        warmup_time_ns = backend.get_warmup_time();
     } else if (cfg.backend == "nccl") {
         nccl_backend backend;
         backend.replay(log, cfg.iterations, cfg.warmup, cfg.verbose, *pool);
         local_timings = backend.get_timings();
+        total_time_ns = backend.get_total_time();
+        warmup_time_ns = backend.get_warmup_time();
     } else {
         if (my_rank == 0) {
             std::cerr << "Error: Unknown backend '" << cfg.backend << "'\n";
@@ -228,15 +230,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    MPI_Barrier(MPI_COMM_WORLD);
-    auto total_end = std::chrono::high_resolution_clock::now();
-    int64_t total_time_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(total_end - total_start).count();
+    int64_t total_min, total_max, total_sum;
+    MPI_Reduce(&total_time_ns, &total_min, 1, MPI_INT64_T, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&total_time_ns, &total_max, 1, MPI_INT64_T, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&total_time_ns, &total_sum, 1, MPI_INT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    int64_t min_time, max_time, sum_time;
-    MPI_Reduce(&total_time_ns, &min_time, 1, MPI_INT64_T, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&total_time_ns, &max_time, 1, MPI_INT64_T, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&total_time_ns, &sum_time, 1, MPI_INT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+    int64_t warmup_min, warmup_max, warmup_sum;
+    MPI_Reduce(&warmup_time_ns, &warmup_min, 1, MPI_INT64_T, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&warmup_time_ns, &warmup_max, 1, MPI_INT64_T, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&warmup_time_ns, &warmup_sum, 1, MPI_INT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
 
     auto all_timings = gather_timings(local_timings, my_rank, num_ranks);
 
@@ -251,9 +253,16 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "=== Summary ===\n"
-                  << "Total time (min): " << min_time << " ns\n"
-                  << "Total time (max): " << max_time << " ns\n"
-                  << "Total time (avg): " << sum_time / num_ranks << " ns\n\n"
+                  << "Warmup time (min): " << warmup_min << " ns\n"
+                  << "Warmup time (max): " << warmup_max << " ns\n"
+                  << "Warmup time (avg): " << warmup_sum / num_ranks << " ns\n\n"
+                  << "Total time (min): " << total_min << " ns\n"
+                  << "Total time (max): " << total_max << " ns\n"
+                  << "Total time (avg): " << total_sum / num_ranks << " ns\n\n"
+                  << "Per-iteration time (min): " << total_min / cfg.iterations << " ns\n"
+                  << "Per-iteration time (max): " << total_max / cfg.iterations << " ns\n"
+                  << "Per-iteration time (avg): " << total_sum / num_ranks / cfg.iterations
+                  << " ns\n\n"
                   << "group_id,iteration,min_ns,max_ns,avg_ns,median_ns\n";
         for (const auto& s : compute_group_stats(all_timings)) {
             std::cout << s.group_id << "," << s.iteration << "," << s.min_ns << "," << s.max_ns
