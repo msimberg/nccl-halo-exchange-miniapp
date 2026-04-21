@@ -8,7 +8,7 @@ mpi_backend::mpi_backend() {}
 
 mpi_backend::~mpi_backend() {}
 
-void mpi_backend::replay(const log_data& log, int iterations, bool verbose,
+void mpi_backend::replay(const log_data& log, int iterations, int warmup, bool verbose,
                          const buffer_pool& pool) {
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
@@ -24,6 +24,37 @@ void mpi_backend::replay(const log_data& log, int iterations, bool verbose,
     }
 
     std::vector<MPI_Request> requests(max_ops_per_group);
+
+    auto run_iteration = [&]() {
+        for (const auto& entries : by_group) {
+            if (entries.empty()) continue;
+
+            const int gid = entries.front()->group_id;
+            int req_count = 0;
+
+            for (const auto* entry : entries) {
+                if (entry->dir == direction::recv) {
+                    MPI_Irecv(pool.buffers[req_count], static_cast<int>(entry->size_bytes),
+                              MPI_BYTE, entry->peer, gid, MPI_COMM_WORLD, &requests[req_count]);
+                    ++req_count;
+                }
+            }
+
+            for (const auto* entry : entries) {
+                if (entry->dir == direction::send) {
+                    MPI_Isend(pool.buffers[req_count], static_cast<int>(entry->size_bytes),
+                              MPI_BYTE, entry->peer, gid, MPI_COMM_WORLD, &requests[req_count]);
+                    ++req_count;
+                }
+            }
+
+            MPI_Waitall(req_count, requests.data(), MPI_STATUSES_IGNORE);
+        }
+    };
+
+    for (int w = 0; w < warmup; ++w) {
+        run_iteration();
+    }
 
     for (int iter = 0; iter < iterations; ++iter) {
         for (const auto& entries : by_group) {

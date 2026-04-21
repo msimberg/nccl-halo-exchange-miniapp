@@ -21,6 +21,7 @@ struct config {
     std::string backend = "mpi";
     std::string memory = "gpu";
     int iterations = 1;
+    int warmup = 1;
     bool verbose = false;
 };
 
@@ -35,16 +36,20 @@ config parse_args(int argc, char** argv) {
             cfg.memory = argv[++i];
         } else if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
             cfg.iterations = std::stoi(argv[++i]);
+        } else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc) {
+            cfg.warmup = std::stoi(argv[++i]);
         } else if (strcmp(argv[i], "--verbose") == 0) {
             cfg.verbose = true;
         } else if (strcmp(argv[i], "--help") == 0) {
-            std::cout << "Usage: halo_replay [options]\n"
-                      << "  --log <path>       Path to halo exchange log file\n"
-                      << "  --backend <name>   Backend: mpi or nccl (default: mpi)\n"
-                      << "  --memory <type>    Buffer memory: host or gpu (default: gpu)\n"
-                      << "  --iterations <N>   Number of replay iterations (default: 1)\n"
-                      << "  --verbose          Output per-exchange timings\n"
-                      << "  --help             Show this help\n";
+            std::cout
+                << "Usage: halo_replay [options]\n"
+                << "  --log <path>       Path to halo exchange log file\n"
+                << "  --backend <name>   Backend: mpi or nccl (default: mpi)\n"
+                << "  --memory <type>    Buffer memory: host or gpu (default: gpu)\n"
+                << "  --iterations <N>   Number of replay iterations (default: 1)\n"
+                << "  --warmup <N>       Number of warmup iterations, not timed (default: 1)\n"
+                << "  --verbose          Output per-exchange timings\n"
+                << "  --help             Show this help\n";
             exit(0);
         }
     }
@@ -195,7 +200,8 @@ int main(int argc, char** argv) {
 
     if (my_rank == 0) {
         std::cout << "Replaying " << log.entries.size() << " exchanges across " << num_ranks
-                  << " ranks, " << cfg.iterations << " iteration(s)\n"
+                  << " ranks, " << cfg.iterations << " iteration(s)"
+                  << " (" << cfg.warmup << " warmup)\n"
                   << "Backend: " << cfg.backend << "\n"
                   << "Memory: " << cfg.memory << "\n"
                   << "Buffers: " << max_ops << " x " << max_size << " bytes\n";
@@ -208,11 +214,11 @@ int main(int argc, char** argv) {
 
     if (cfg.backend == "mpi") {
         mpi_backend backend;
-        backend.replay(log, cfg.iterations, cfg.verbose, *pool);
+        backend.replay(log, cfg.iterations, cfg.warmup, cfg.verbose, *pool);
         local_timings = backend.get_timings();
     } else if (cfg.backend == "nccl") {
         nccl_backend backend;
-        backend.replay(log, cfg.iterations, cfg.verbose, *pool);
+        backend.replay(log, cfg.iterations, cfg.warmup, cfg.verbose, *pool);
         local_timings = backend.get_timings();
     } else {
         if (my_rank == 0) {

@@ -15,7 +15,7 @@ nccl_backend::~nccl_backend() {
     }
 }
 
-void nccl_backend::replay(const log_data& log, int iterations, bool verbose,
+void nccl_backend::replay(const log_data& log, int iterations, int warmup, bool verbose,
                           const buffer_pool& pool) {
     int my_rank, num_ranks;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
@@ -35,6 +35,36 @@ void nccl_backend::replay(const log_data& log, int iterations, bool verbose,
     std::vector<std::vector<const exchange_entry*>> by_group(log.max_group_id);
     for (const auto& entry : log.entries) {
         by_group[entry.group_id - 1].push_back(&entry);
+    }
+
+    for (int w = 0; w < warmup; ++w) {
+        for (const auto& entries : by_group) {
+            if (entries.empty()) continue;
+
+            const int gid = entries.front()->group_id;
+            int buf_idx = 0;
+
+            ncclGroupStart();
+
+            for (const auto* entry : entries) {
+                if (entry->dir == direction::recv) {
+                    ncclRecv(pool.buffers[buf_idx], entry->size_bytes, ncclInt8, entry->peer, comm,
+                             stream);
+                    ++buf_idx;
+                }
+            }
+
+            for (const auto* entry : entries) {
+                if (entry->dir == direction::send) {
+                    ncclSend(pool.buffers[buf_idx], entry->size_bytes, ncclInt8, entry->peer, comm,
+                             stream);
+                    ++buf_idx;
+                }
+            }
+
+            ncclGroupEnd();
+            cudaStreamSynchronize(stream);
+        }
     }
 
     for (int iter = 0; iter < iterations; ++iter) {

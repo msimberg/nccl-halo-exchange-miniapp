@@ -17,7 +17,8 @@ class mpi_backend {
     mpi_backend();
     ~mpi_backend();
 
-    void replay(const log_data& log, int iterations, bool verbose, const buffer_pool& pool);
+    void replay(const log_data& log, int iterations, int warmup, bool verbose,
+                const buffer_pool& pool);
     std::vector<timing_result> get_timings() const;
 
   private:
