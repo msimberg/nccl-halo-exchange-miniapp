@@ -97,7 +97,7 @@ static std::vector<group_stats> compute_group_stats(const std::vector<timing_res
                          sum / static_cast<int64_t>(n), median});
     }
     std::sort(stats.begin(), stats.end(), [](const group_stats& a, const group_stats& b) {
-        return std::tie(a.iteration, a.group_id) < std::tie(b.iteration, a.group_id);
+        return std::tie(a.iteration, a.group_id) < std::tie(b.iteration, b.group_id);
     });
     return stats;
 }
